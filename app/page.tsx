@@ -1,101 +1,74 @@
-import Image from "next/image";
+"use client"
 
-export default function Home() {
+import { useState } from "react"
+import { motion } from "framer-motion"
+import { obfuscateCode } from "@/lib/obfuscate"
+
+// Example shadcn UI button
+import { Button } from "@/components/ui/button"
+
+export default function HomePage() {
+  const [inputValue, setInputValue] = useState("")
+  const [obfuscated, setObfuscated] = useState("")
+  const [copied, setCopied] = useState(false)
+
+  const handleObfuscate = () => {
+    setCopied(false)
+    if (!inputValue.trim()) return
+    const result = obfuscateCode(inputValue)
+    setObfuscated(result)
+  }
+
+  // Copy to Clipboard
+  const handleCopy = () => {
+    if (!obfuscated) return
+    navigator.clipboard.writeText(obfuscated).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <main className="container mx-auto max-w-3xl py-8 px-4 space-y-6">
+      <h1 className="text-3xl font-bold mb-2">
+        PyGuard
+      </h1>
+      <p className="text-gray-700 mb-4">
+        Protect your code with PyGuard, a fast, reliable, and secure Python obfuscator.
+      </p>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+      <textarea
+        className="w-full min-h-[200px] p-3 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
+        placeholder="Enter your Python code here..."
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
+      />
+
+      <div className="flex items-center space-x-4">
+        <Button variant="default" onClick={handleObfuscate}>
+          Obfuscate
+        </Button>
+        {obfuscated && (
+          <Button variant="outline" onClick={handleCopy}>
+            {copied ? "Copied!" : "Copy to Clipboard"}
+          </Button>
+        )}
+      </div>
+
+      {obfuscated && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="mt-6 p-3 bg-white border border-gray-300 rounded"
+        >
+          <div 
+            className="whitespace-pre-wrap max-h-80 overflow-auto font-mono text-sm"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
-  );
+            {obfuscated}
+          </div>
+        </motion.div>
+      )}
+    </main>
+  )
 }
