@@ -1,5 +1,5 @@
 # Step 1: Use an official Node image as the builder
-FROM node:18-alpine AS builder
+FROM node:24-alpine AS builder
 
 # Step 2: Set working directory
 WORKDIR /app
@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Step 7: Use a smaller Node image for the production build
-FROM node:18-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /app
 
