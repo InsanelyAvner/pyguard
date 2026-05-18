@@ -20,7 +20,7 @@ import { obfuscatePythonCode } from "../lib/obfuscate";
 import { makeV5Schema } from "../lib/v5/schema";
 import { INTERPRETER_SRC_B64 } from "../lib/v5/interpreter_src";
 import type { V5IR } from "../lib/v5/assemble";
-import { createCompileAndPackCode } from "../scripts/multi_marshal.mjs";
+import { createCompileAndPackCode, discoverPythons } from "../scripts/multi_marshal.mjs";
 
 const ROOT = path.resolve(__dirname, "..");
 const CASES_DIR = path.join(ROOT, "tests", "cases");
@@ -32,9 +32,9 @@ interface RunResult {
     code: number;
 }
 
-function runPython(file: string, timeoutMs = 15000): RunResult {
+function runPython(pyBin: string, file: string, timeoutMs = 15000): RunResult {
     try {
-        const stdout = execFileSync("python3", [file], {
+        const stdout = execFileSync(pyBin, [file], {
             timeout: timeoutMs,
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
@@ -50,7 +50,7 @@ function runPython(file: string, timeoutMs = 15000): RunResult {
 }
 
 function buildV5IR(source: string, schema: object): V5IR {
-    const out = execFileSync("python3", [path.join(ROOT, "lib", "v5", "build_ir.py")], {
+    const out = execFileSync(BUILD_PYTHON, [path.join(ROOT, "lib", "v5", "build_ir.py")], {
         input: source,
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
@@ -67,57 +67,13 @@ function buildV5IR(source: string, schema: object): V5IR {
 
 interface PyBuild { bin: string; major: number; minor: number; }
 
-function probePy(bin: string): PyBuild | null {
-    try {
-        const out = execFileSync(bin, ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        const m = out.match(/^(\d+)\.(\d+)$/);
-        if (!m) return null;
-        return { bin, major: parseInt(m[1], 10), minor: parseInt(m[2], 10) };
-    } catch {
-        return null;
-    }
-}
-
-function discoverPythons(): PyBuild[] {
-    const seen = new Map<string, PyBuild>();
-    const add = (bin: string) => {
-        const info = probePy(bin);
-        if (!info) return;
-        const key = `${info.major}.${info.minor}`;
-        if (!seen.has(key)) seen.set(key, info);
-    };
-    const envList = process.env.PYGUARD_PYTHON_BINS;
-    if (envList) {
-        for (const b of envList.split(":").filter(Boolean)) add(b);
-    } else {
-        const minors = ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"];
-        for (const v of minors) {
-            for (const c of [
-                `/opt/homebrew/opt/python@${v}/bin/python${v}`,
-                `/opt/homebrew/bin/python${v}`,
-                `/usr/local/opt/python@${v}/bin/python${v}`,
-                `/usr/local/bin/python${v}`,
-                `/usr/bin/python${v}`,
-                `${process.env.HOME || ""}/.local/bin/python${v}`,
-                `python${v}`,
-            ]) add(c);
-        }
-        add("python3");
-    }
-    return Array.from(seen.values()).sort((a, b) =>
-        a.major !== b.major ? a.major - b.major : a.minor - b.minor,
-    );
-}
-
-const PYTHONS = discoverPythons();
+const PYTHONS = discoverPythons() as PyBuild[];
 if (PYTHONS.length === 0) throw new Error("no Python build toolchains discovered");
+const BUILD_PYTHON = PYTHONS[PYTHONS.length - 1].bin;
 
 function lzmaCompress(bytes: Uint8Array): Uint8Array {
     const r = execFileSync(
-        PYTHONS[0].bin,
+        BUILD_PYTHON,
         ["-c", "import sys, lzma; sys.stdout.buffer.write(lzma.compress(sys.stdin.buffer.read(), preset=9|lzma.PRESET_EXTREME))"],
         { input: Buffer.from(bytes), maxBuffer: 256 * 1024 * 1024 },
     );
@@ -127,6 +83,42 @@ function lzmaCompress(bytes: Uint8Array): Uint8Array {
 function prepareInterpreterSource(): string {
     const src = zlib.inflateRawSync(Buffer.from(INTERPRETER_SRC_B64, "base64"));
     return Buffer.from(src).toString("utf8");
+}
+
+function assertUnsupportedRuntimeMessage(interpreterSource: string): void {
+    if (PYTHONS.length < 2) {
+        console.log("SKIP  unsupported-runtime diagnostic (need at least 2 Python builds)");
+        return;
+    }
+    const buildOnly = PYTHONS[0];
+    const runWith = PYTHONS[PYTHONS.length - 1];
+    if (buildOnly.major === runWith.major && buildOnly.minor === runWith.minor) {
+        console.log("SKIP  unsupported-runtime diagnostic (only one Python minor)");
+        return;
+    }
+
+    const source = "print('should not run')\n";
+    const schema = makeV5Schema();
+    const compileAndPackCode = createCompileAndPackCode([buildOnly]);
+    const obf = obfuscatePythonCode(source, {
+        v5IR: buildV5IR(source, schema),
+        interpreterSource,
+        compileAndPackCode,
+        compress: lzmaCompress,
+    });
+    const outPath = path.join(OUT_DIR, "_unsupported_runtime.py");
+    fs.writeFileSync(outPath, obf);
+    const actual = runPython(runWith.bin, outPath);
+    if (
+        actual.code !== 1 ||
+        actual.stdout !== "" ||
+        !actual.stderr.includes(`unsupported CPython ${runWith.major}.${runWith.minor}`)
+    ) {
+        throw new Error(
+            `unsupported-runtime diagnostic failed: code=${actual.code} stdout=${JSON.stringify(actual.stdout)} stderr=${JSON.stringify(actual.stderr)}`,
+        );
+    }
+    console.log(`PASS  unsupported-runtime diagnostic  built py${buildOnly.major}.${buildOnly.minor} ran py${runWith.major}.${runWith.minor}`);
 }
 
 function main() {
@@ -158,34 +150,39 @@ function main() {
         const outPath = path.join(OUT_DIR, name);
         fs.writeFileSync(outPath, obf);
 
-        const expected = runPython(srcPath);
-        const actual = runPython(outPath);
+        for (const py of PYTHONS) {
+            const pyLabel = `${py.major}.${py.minor}`;
+            const expected = runPython(py.bin, srcPath);
+            const actual = runPython(py.bin, outPath);
 
-        const ok =
-            expected.stdout === actual.stdout &&
-            expected.code === actual.code;
+            const ok =
+                expected.stdout === actual.stdout &&
+                expected.code === actual.code;
 
-        if (ok) {
-            pass++;
-            console.log(`PASS  ${name}`);
-        } else {
-            fail++;
-            failures.push(name);
-            console.log(`FAIL  ${name}`);
-            console.log(`  expected.code=${expected.code}  actual.code=${actual.code}`);
-            console.log(`  expected.stdout=${JSON.stringify(expected.stdout)}`);
-            console.log(`  actual.stdout=${JSON.stringify(actual.stdout)}`);
-            if (actual.stderr.trim()) {
-                console.log(`  actual.stderr=${actual.stderr.trim().split("\n").slice(-10).join("\n  ")}`);
+            if (ok) {
+                pass++;
+                console.log(`PASS  ${name}  py${pyLabel}`);
+            } else {
+                fail++;
+                failures.push(`${name}@${pyLabel}`);
+                console.log(`FAIL  ${name}  py${pyLabel}`);
+                console.log(`  expected.code=${expected.code}  actual.code=${actual.code}`);
+                console.log(`  expected.stdout=${JSON.stringify(expected.stdout)}`);
+                console.log(`  actual.stdout=${JSON.stringify(actual.stdout)}`);
+                if (actual.stderr.trim()) {
+                    console.log(`  actual.stderr=${actual.stderr.trim().split("\n").slice(-10).join("\n  ")}`);
+                }
             }
         }
     }
 
-    console.log(`\n${pass} passed, ${fail} failed (of ${cases.length})`);
+    console.log(`\n${pass} passed, ${fail} failed (of ${cases.length} cases × ${PYTHONS.length} Python builds)`);
     if (fail > 0) {
         console.log("failures:", failures.join(", "));
         process.exit(1);
     }
+
+    assertUnsupportedRuntimeMessage(interpreterSource);
 }
 
 main();

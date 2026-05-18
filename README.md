@@ -101,14 +101,19 @@ Use these in order:
 
 ```bash
 npx tsx tests/run_disclosure_checks.ts
-npx tsx tests/run_tests.ts
+npm run test:compat
+npm run test:compat:docker
 bash tests/pentest/run_scoreboard.sh
 ```
 
 What they mean:
 
 - `run_disclosure_checks.ts`: primary release gate, including the real `tests/test_rev/dist.py` closure-lift assertion and a guard against plain decisive literals surviving in the lifted island payload
-- `run_tests.ts`: compatibility regression gate
+- `run_tests.ts`: host compatibility regression gate; it builds every case once
+  and runs each generated stub on every discovered local CPython minor
+- `run_docker_compat.mjs`: Linux runtime compatibility gate against official
+  `python:3.9-slim` through `python:3.14-slim` images. Override with
+  `PYGUARD_DOCKER_IMAGES=python:3.12-slim,python:3.13-slim` when narrowing CI.
 - `run_scoreboard.sh`: attack dashboard
 
 The scoreboard matters, but it is not the product definition. If the shortest one-run recovery path still works, the hardening round is not done even if many attacks say `HELD`.
@@ -121,7 +126,9 @@ PyGuard is deliberately honest about what it cannot guarantee:
 - A sufficiently complete symbolic/static emulator can recover what the runtime recovers.
 - Runtime values are not protected. If the program prints a secret, running the program reveals it.
 - Import names still have unavoidable leakage through Python's import system.
-- Artifacts are CPython-minor-specific and should fail closed on mismatches.
+- Artifacts are CPython-minor-specific. The service should build with every
+  target CPython minor installed; otherwise the generated stub now exits with a
+  clear unsupported-runtime message instead of silently producing no output.
 - `match` (PEP 634) and `except*` (PEP 654) are not yet lowered by the v5 lifter; inputs that use them fail loud at build time with `NotImplementedError` rather than producing a broken stub.
 
 If you need cryptographic secrecy, move the secret off the client.
@@ -164,12 +171,12 @@ The `/api/obfuscate` Next.js route shells out to Python on untrusted input, so t
 Container:
 
 - `Dockerfile` runs the Node process as an unprivileged `pyguard` user (uid 10001), not root.
-- The runtime stage ships CPython 3.9 – 3.14 side-by-side on `$PATH`; the route's `discoverPythons()` probes these on first request.
+- The runtime stage ships CPython 3.9 – 3.14 side-by-side on `$PATH`; the route's `discoverPythons()` probes these on first request. This is the supported common-version range tested locally and in Docker.
 - `HEALTHCHECK` fetches `/` and expects a 2xx so orchestrators can rotate unhealthy replicas.
 
 Subprocess safety:
 
-- Every `spawnSync` (build_ir, lzma compressor, version probe) has an explicit wall-clock `timeout` with `SIGKILL` on expiry. A hung Python subprocess will not starve the route's 60 s budget or block a worker indefinitely.
+- Every `spawnSync` (build_ir, lzma compressor, version probe, code-pack compiler) has an explicit wall-clock `timeout` with `SIGKILL` on expiry. A hung Python subprocess will not starve the route's 180 s budget or block a worker indefinitely.
 - Subprocesses get a minimal whitelisted env (`PATH`, `LANG`, `LC_ALL`, `PYGUARD_V5_SCHEMA`) — not the full Node `process.env`, so Node-side secrets do not leak into the Python build step.
 - A 1 MB input cap is enforced before the AST is even parsed.
 
@@ -183,7 +190,8 @@ Deploy-time env vars:
 | Variable | Default | Purpose |
 | -- | -- | -- |
 | `TRUSTED_PROXY` | `0` | Set to `1` when running behind a reverse proxy; the rate limiter then keys on `x-forwarded-for` / `x-real-ip`. |
-| `PYGUARD_PYTHON_BINS` | *(empty)* | Colon-separated list of Python binaries to use instead of probing `$PATH`. |
+| `PYGUARD_PYTHON_BINS` | *(empty)* | Platform-delimited list of Python binaries to use instead of probing `$PATH` (`:` on Linux/macOS, `;` on Windows). |
+| `PYGUARD_COMPILE_TIMEOUT_MS` | `120000` | Timeout for per-minor code-pack compiler subprocesses. Raise this on slow CI/build hosts. |
 | `PYGUARD_RL_CAPACITY` | `10` | Max requests per window per IP. |
 | `PYGUARD_RL_WINDOW_MS` | `60000` | Rate-limit window length (ms). |
 | `PYGUARD_ALLOW_UNOBFUSCATED_IR` | *(unset)* | Opt-in escape hatch for embedded/Pyodide contexts where `transform_ast` genuinely cannot be loaded. Any production deployment should leave this unset — otherwise a broken import silently ships un-deformed IR. |

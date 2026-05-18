@@ -224,8 +224,8 @@ if (pythons.length === 0) {
     console.error('gen-v5-stub: no Python build toolchains discovered');
     process.exit(3);
 }
-console.error(`gen-v5-stub: using ${pythons[0].bin} for IR packaging`);
-const buildIrPython = pythons[0].bin;
+const buildIrPython = pythons[pythons.length - 1].bin;
+console.error(`gen-v5-stub: using ${buildIrPython} for IR packaging`);
 
 // Step 1: compile IR via build_ir.py.
 // build_ir's __main__ reads source from stdin and writes a JSON envelope

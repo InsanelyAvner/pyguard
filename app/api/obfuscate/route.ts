@@ -13,7 +13,7 @@ import { createRateLimiter, clientIp } from "@/lib/rateLimit";
 // ---------------------------------------------------------------------------
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 /** Refuse pathologically large inputs upfront (both to avoid DoS and because
  *  the obfuscator's own complexity becomes quadratic above this). */
@@ -192,10 +192,12 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    // 3. Lift user source → IR (any single discovered Python works — the
-    //    emitted IR is marshal-independent JSON).
+    // 3. Lift user source → IR with the newest discovered Python. The emitted
+    //    IR is marshal-independent JSON, but parsing with the newest toolchain
+    //    accepts newer source syntax when the server has that Python installed.
+    const buildPython = pythons[pythons.length - 1].bin;
     const schema = makeV5Schema();
-    const ir = spawnSync(pythons[0].bin, [BUILD_IR_PATH], {
+    const ir = spawnSync(buildPython, [BUILD_IR_PATH], {
         input: source,
         encoding: "utf-8",
         env: subprocessEnv({ PYGUARD_V5_SCHEMA: JSON.stringify(schema) }),
@@ -229,7 +231,7 @@ export async function POST(req: NextRequest) {
     // 4. Prepare the interpreter source and the code-pack compiler used
     //    by stage1 / stage2 / interpreter packaging.
     let interpreterSource = "";
-    const compress = makeLzmaCompressor(pythons[0].bin);
+    const compress = makeLzmaCompressor(buildPython);
     const compileAndPackCode = createCompileAndPackCode(pythons);
     try {
         const interpSrcBytes = zlib.inflateRawSync(

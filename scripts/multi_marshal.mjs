@@ -14,6 +14,7 @@
 // for that minor. No nested tag. Audit hooks still observe exactly one
 // marshal.loads event per stage on the matching entry's bytes only.
 
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,10 +25,33 @@ const BUILD_IR_PATH = path.join(ROOT, 'lib/v5/build_ir.py');
 
 const DEFAULT_MINORS = ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14'];
 const ENTRY_HEADER_LEN = 6;
+const COMPILE_TIMEOUT_MS = Number(process.env.PYGUARD_COMPILE_TIMEOUT_MS || 120_000);
+
+function subprocessEnv(extra = {}) {
+    const keep = [
+        'PATH',
+        'HOME',
+        'USERPROFILE',
+        'LOCALAPPDATA',
+        'SYSTEMROOT',
+        'SystemRoot',
+        'WINDIR',
+        'LANG',
+        'LC_ALL',
+        'LC_CTYPE',
+    ];
+    const env = {};
+    for (const key of keep) {
+        if (process.env[key]) env[key] = process.env[key];
+    }
+    if (!env.PATH) env.PATH = '';
+    return { ...env, ...extra };
+}
 
 function probeBin(bin) {
     const r = spawnSync(bin, ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'], {
         encoding: 'utf-8',
+        env: subprocessEnv(),
         timeout: 5_000,
         killSignal: 'SIGKILL',
     });
@@ -38,17 +62,56 @@ function probeBin(bin) {
     return { bin, major: parseInt(m[1], 10), minor: parseInt(m[2], 10) };
 }
 
+function splitPythonBinList(value) {
+    if (!value) return [];
+    return value
+        .split(path.delimiter)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
+function pathCandidates() {
+    const out = [];
+    const pathValue = process.env.PATH || '';
+    for (const dir of pathValue.split(path.delimiter).filter(Boolean)) {
+        try {
+            for (const name of readdirSync(dir)) {
+                if (/^python(?:3(?:\.\d+)?)?(?:\.exe)?$/i.test(name)) {
+                    out.push(path.join(dir, name));
+                }
+            }
+        } catch {
+            // Ignore unreadable PATH entries.
+        }
+    }
+    return out;
+}
+
+function realKey(bin, info) {
+    try {
+        if (existsSync(bin)) return realpathSync(bin);
+    } catch {
+        // Fall back to the version key below.
+    }
+    return `${info.major}.${info.minor}`;
+}
+
 export function discoverPythons() {
     const envList = process.env.PYGUARD_PYTHON_BINS;
     const seen = new Map();
+    const seenReal = new Set();
     const add = (bin) => {
+        if (!bin) return;
         const info = probeBin(bin);
         if (!info) return;
         const key = `${info.major}.${info.minor}`;
+        const rk = realKey(bin, info);
+        if (seenReal.has(rk)) return;
+        seenReal.add(rk);
         if (!seen.has(key)) seen.set(key, info);
     };
     if (envList) {
-        for (const b of envList.split(':').filter(Boolean)) add(b);
+        for (const b of splitPythonBinList(envList)) add(b);
     } else {
         const candidates = [];
         for (const v of DEFAULT_MINORS) {
@@ -59,10 +122,21 @@ export function discoverPythons() {
                 `/usr/local/bin/python${v}`,
                 `/usr/bin/python${v}`,
                 `${process.env.HOME || ''}/.local/bin/python${v}`,
+                `${process.env.HOME || ''}/.pyenv/shims/python${v}`,
+                `${process.env.HOME || ''}/.asdf/shims/python${v}`,
                 `python${v}`,
+                `python${v}.exe`,
             );
         }
-        candidates.push('python3');
+        candidates.push(
+            process.env.PYTHON || '',
+            process.env.PYTHON3 || '',
+            'python3',
+            'python',
+            'python3.exe',
+            'python.exe',
+            ...pathCandidates(),
+        );
         for (const c of candidates) add(c);
     }
     return Array.from(seen.values()).sort((a, b) => {
@@ -75,17 +149,18 @@ function compileWithModeOne(pythonBin, source, filename, mode, tagMagic) {
     const r = spawnSync(pythonBin, [BUILD_IR_PATH], {
         input: source,
         encoding: 'utf-8',
-        env: {
-            PATH: process.env.PATH,
+        env: subprocessEnv({
             PYGUARD_MODE: mode,
             PYGUARD_FILENAME: filename || '<pg>',
-        },
+        }),
         maxBuffer: 64 * 1024 * 1024,
-        timeout: 45_000,
+        timeout: COMPILE_TIMEOUT_MS,
         killSignal: 'SIGKILL',
     });
     if (r.error && r.error.code === 'ETIMEDOUT') {
-        throw new Error('compile_and_marshal subprocess timed out');
+        throw new Error(
+            `compile_with_mode subprocess (${pythonBin}, ${mode}, ${filename || '<pg>'}) timed out after ${COMPILE_TIMEOUT_MS}ms`,
+        );
     }
     if (r.status !== 0) {
         throw new Error('compile_with_mode subprocess (' + pythonBin + ') failed: ' + r.stderr);

@@ -889,6 +889,12 @@ ${codeAssignments}
 def ${names.load}(${names.buf}):
     if len(${names.buf}) < 5 or ${names.buf}[:4] != bytes(${bytesArrayLit(cfg.magic)}):
         sys.exit(0)
+    if getattr(getattr(sys, 'implementation', None), 'name', 'cpython') != 'cpython':
+        try:
+            sys.stderr.write('PyGuard: unsupported Python implementation; use CPython.\\n')
+        except Exception:
+            pass
+        sys.exit(1)
     ${names.cnt} = ${names.buf}[4] ^ ${cfg.countXor}
     ${names.ofs} = 5
     ${names.sel} = None
@@ -908,7 +914,11 @@ def ${names.load}(${names.buf}):
             ${names.sel} = ${names.buf}[${names.ofs}:${names.ofs} + ${names.len}]
         ${names.ofs} += ${names.len}
     if ${names.sel} is None:
-        sys.exit(0)
+        try:
+            sys.stderr.write('PyGuard: unsupported CPython ' + str(sys.version_info.major) + '.' + str(sys.version_info.minor) + '; rebuild with that Python version installed.\\n')
+        except Exception:
+            pass
+        sys.exit(1)
     try:
         ${names.obj}, ${names.end} = ${names.dec}(${names.sel}, 0)
     except Exception:
@@ -1609,7 +1619,7 @@ export function obfuscatePythonCode(input: string, opts?: ObfuscateOpts): string
     // fails → SystemExit(0) before interpreter bytecode runs.
     const canonicalRegion =
 `${BEGIN_MARKER}
-import sys, hashlib, base64, marshal, lzma, struct
+import sys, os, hashlib, base64, marshal, lzma, struct
 ${n_ftype} = (lambda: 0).__class__
 ${n_O} = ${bcap.tupleSource}
 ${n_gf} = ${n_O}[${bi['getattr']}](sys, '_getf' + 'rame')
@@ -1962,14 +1972,18 @@ def ${n_vfy}(${v_in}):
         return hashlib.sha256(${v_in} + bytes(32 * [255])).digest()
 if ${n_tchk}():
     sys.exit(0)
-try:
-    ${n_path} = __file__
-except NameError:
-    ${n_path} = sys.argv[0] if sys.argv else ''
-try:
-    with ${n_O}[${bi['open']}](${n_path}, 'rb') as ${n_f}:
-        ${n_srcRaw} = ${n_f}.read()
-except Exception:
+${n_srcRaw} = None
+for ${n_f} in (globals().get('__file__', None), sys.argv[0] if sys.argv else None):
+    try:
+        if not ${n_f} or (${n_O}[${bi['getattr']}](${n_f}, 'startswith', lambda *_: False)('<') and ${n_O}[${bi['getattr']}](${n_f}, 'endswith', lambda *_: False)('>')):
+            continue
+        ${n_path} = os.path.abspath(${n_f})
+        with ${n_O}[${bi['open']}](${n_path}, 'rb') as ${n_f}:
+            ${n_srcRaw} = ${n_f}.read()
+        break
+    except Exception:
+        pass
+if ${n_srcRaw} is None:
     sys.exit(0)
 ${n_srcRaw} = ${n_srcRaw}.replace(b'\\r\\n', b'\\n').replace(b'\\r', b'\\n')
 if ${n_srcRaw}[:3] == b'\\xef\\xbb\\xbf':

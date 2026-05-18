@@ -243,7 +243,7 @@ _pg_interp_hash = hashlib.sha256(_pg_interp_ct).digest()
 # it under a randomized globals name. Pop+clear the slot so neither the
 # decoder nor the loaded code stays reachable through stage2 globals.
 _pg_interp_code = globals().pop(${JSON.stringify(interpCodeVar)})
-_pg_interp_ns = {bytes([95, 95, 98, 117, 105, 108, 116, 105, 110, 115, 95, 95]).decode(): __builtins__, bytes([95, 95, 110, 97, 109, 101, 95, 95]).decode(): bytes([60, 112, 103, 95, 105, 62]).decode()}
+_pg_interp_ns = {bytes([95, 95, 98, 117, 105, 108, 116, 105, 110, 115, 95, 95]).decode(): __builtins__, bytes([95, 95, 110, 97, 109, 101, 95, 95]).decode(): bytes([60, 112, 103, 95, 105, 62]).decode(), bytes([95, 80, 71, 95, 70, 73, 76, 69]).decode(): globals().get(bytes([95, 95, 102, 105, 108, 101, 95, 95]).decode(), bytes().decode())}
 _pg_interp_fn = _pg_ft(_pg_interp_code, _pg_interp_ns)
 del _pg_interp_ns, _pg_interp_code
 try:

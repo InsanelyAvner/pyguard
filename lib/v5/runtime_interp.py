@@ -1504,13 +1504,21 @@ class Interp:
                 sys.setrecursionlimit(50000)
         except Exception:
             pass
+        try:
+            runtime_file = globals().get('_PG_FILE')
+        except Exception:
+            runtime_file = None
         glob = {
             '__name__': module_name,
             '__builtins__': builtins,
             '__doc__': None,
             '__annotations__': {},
             '__package__': None,
+            '__loader__': None,
+            '__spec__': None,
         }
+        if isinstance(runtime_file, str) and runtime_file:
+            glob['__file__'] = runtime_file
         scope = Scope(globals_=glob, is_module=True)
         try:
             if isinstance(tree, tuple) and tree and _pg_tag(tree[0]) == 'Code':
