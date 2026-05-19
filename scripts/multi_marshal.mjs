@@ -25,7 +25,7 @@ const BUILD_IR_PATH = path.join(ROOT, 'lib/v5/build_ir.py');
 
 const DEFAULT_MINORS = ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14'];
 const ENTRY_HEADER_LEN = 6;
-const COMPILE_TIMEOUT_MS = Number(process.env.PYGUARD_COMPILE_TIMEOUT_MS || 120_000);
+const COMPILE_TIMEOUT_MS = Number(process.env.PYGUARD_COMPILE_TIMEOUT_MS || 300_000);
 
 function subprocessEnv(extra = {}) {
     const keep = [
@@ -145,6 +145,29 @@ export function discoverPythons() {
     });
 }
 
+export function targetMinors() {
+    const raw = process.env.PYGUARD_TARGET_MINORS;
+    if (!raw) return DEFAULT_MINORS.slice();
+    return raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+export function assertPythonTargetCoverage(pythons, targets = targetMinors()) {
+    const found = new Set(
+        (pythons || []).map((p) => `${p.major}.${p.minor}`),
+    );
+    const missing = targets.filter((v) => !found.has(v));
+    if (missing.length > 0) {
+        throw new Error(
+            'missing target CPython toolchains: ' + missing.join(', ') +
+            '. Install these versions, set PYGUARD_PYTHON_BINS, or narrow ' +
+            'PYGUARD_TARGET_MINORS intentionally.',
+        );
+    }
+}
+
 function compileWithModeOne(pythonBin, source, filename, mode, tagMagic) {
     const r = spawnSync(pythonBin, [BUILD_IR_PATH], {
         input: source,
@@ -230,7 +253,11 @@ export function createCompileAndMarshal(pythons) {
     if (builds.length === 0) {
         throw new Error('createCompileAndMarshal: no Python toolchains discovered');
     }
+    const cache = new Map();
     return (source, filename) => {
+        const cacheKey = `${filename || '<pg>'}\0${source}`;
+        const cached = cache.get(cacheKey);
+        if (cached) return cached;
         const entries = [];
         const seen = new Set();
         for (const b of builds) {
@@ -240,7 +267,9 @@ export function createCompileAndMarshal(pythons) {
             seen.add(key);
             entries.push(entry);
         }
-        return packPGMV(entries);
+        const packed = packPGMV(entries);
+        cache.set(cacheKey, packed);
+        return packed;
     };
 }
 
@@ -249,7 +278,11 @@ export function createCompileAndPackCode(pythons) {
     if (builds.length === 0) {
         throw new Error('createCompileAndPackCode: no Python toolchains discovered');
     }
+    const cache = new Map();
     return (source, filename) => {
+        const cacheKey = `${filename || '<pg>'}\0${source}`;
+        const cached = cache.get(cacheKey);
+        if (cached) return cached;
         const entries = [];
         const seen = new Set();
         for (const b of builds) {
@@ -259,6 +292,8 @@ export function createCompileAndPackCode(pythons) {
             seen.add(key);
             entries.push(entry);
         }
-        return packPGCV(entries);
+        const packed = packPGCV(entries);
+        cache.set(cacheKey, packed);
+        return packed;
     };
 }

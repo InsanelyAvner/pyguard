@@ -5,7 +5,11 @@ import path from "node:path";
 import { obfuscatePythonCode } from "@/lib/obfuscate";
 import { makeV5Schema } from "@/lib/v5/schema";
 import { INTERPRETER_SRC_B64 } from "@/lib/v5/interpreter_src";
-import { createCompileAndPackCode, discoverPythons } from "@/scripts/multi_marshal.mjs";
+import {
+    assertPythonTargetCoverage,
+    createCompileAndPackCode,
+    discoverPythons,
+} from "@/scripts/multi_marshal.mjs";
 import { createRateLimiter, clientIp } from "@/lib/rateLimit";
 
 // ---------------------------------------------------------------------------
@@ -143,6 +147,7 @@ function getPythons(): PyInfo[] {
     if (found.length === 0) {
         throw new Error("no CPython toolchains discovered on server");
     }
+    assertPythonTargetCoverage(found);
     cachedPythons = found;
     return found;
 }

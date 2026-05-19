@@ -191,7 +191,9 @@ Deploy-time env vars:
 | -- | -- | -- |
 | `TRUSTED_PROXY` | `0` | Set to `1` when running behind a reverse proxy; the rate limiter then keys on `x-forwarded-for` / `x-real-ip`. |
 | `PYGUARD_PYTHON_BINS` | *(empty)* | Platform-delimited list of Python binaries to use instead of probing `$PATH` (`:` on Linux/macOS, `;` on Windows). |
-| `PYGUARD_COMPILE_TIMEOUT_MS` | `120000` | Timeout for per-minor code-pack compiler subprocesses. Raise this on slow CI/build hosts. |
+| `PYGUARD_TARGET_MINORS` | `3.9,3.10,3.11,3.12,3.13,3.14` | CPython minor versions that must be present before generating stubs. Narrow this only when intentionally producing limited-target artifacts. |
+| `PYGUARD_ALLOW_PARTIAL_PYTHONS` | *(unset)* | Local `gen-v5-stub.mjs` escape hatch that permits generating a stub with only discovered Python minors. Do not set in production. |
+| `PYGUARD_COMPILE_TIMEOUT_MS` | `300000` | Timeout for per-minor code-pack compiler subprocesses. Raise this on slow CI/build hosts. |
 | `PYGUARD_RL_CAPACITY` | `10` | Max requests per window per IP. |
 | `PYGUARD_RL_WINDOW_MS` | `60000` | Rate-limit window length (ms). |
 | `PYGUARD_ALLOW_UNOBFUSCATED_IR` | *(unset)* | Opt-in escape hatch for embedded/Pyodide contexts where `transform_ast` genuinely cannot be loaded. Any production deployment should leave this unset — otherwise a broken import silently ships un-deformed IR. |

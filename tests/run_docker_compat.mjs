@@ -11,7 +11,27 @@ const CASES_DIR = path.join(ROOT, "tests", "cases");
 const OUT_DIR = path.join(ROOT, "tests", "out_v5");
 const DOCKER_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pyguard-docker-"));
 fs.writeFileSync(path.join(DOCKER_CONFIG_DIR, "config.json"), "{\"auths\":{}}\n");
-const DOCKER_ENV = { ...process.env, DOCKER_CONFIG: process.env.DOCKER_CONFIG || DOCKER_CONFIG_DIR };
+
+function currentDockerHost() {
+    if (process.env.DOCKER_HOST) return process.env.DOCKER_HOST;
+    const r = spawnSync("docker", [
+        "context",
+        "inspect",
+        "--format",
+        '{{(index .Endpoints "docker").Host}}',
+    ], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+    });
+    return r.status === 0 ? r.stdout.trim() : "";
+}
+
+const DOCKER_ENV = {
+    ...process.env,
+    DOCKER_CONFIG: process.env.DOCKER_CONFIG || DOCKER_CONFIG_DIR,
+    ...(currentDockerHost() ? { DOCKER_HOST: currentDockerHost() } : {}),
+};
 
 const DEFAULT_IMAGES = [
     "python:3.9-slim",

@@ -16,7 +16,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { discoverPythons as discoverPythonsHelper } from './multi_marshal.mjs';
+import {
+    assertPythonTargetCoverage,
+    discoverPythons as discoverPythonsHelper,
+} from './multi_marshal.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -223,6 +226,15 @@ const pythons = discoverPythonsHelper();
 if (pythons.length === 0) {
     console.error('gen-v5-stub: no Python build toolchains discovered');
     process.exit(3);
+}
+if (!process.env.PYGUARD_ALLOW_PARTIAL_PYTHONS) {
+    try {
+        assertPythonTargetCoverage(pythons);
+    } catch (err) {
+        console.error(`gen-v5-stub: ${err.message}`);
+        console.error('Set PYGUARD_ALLOW_PARTIAL_PYTHONS=1 only for narrow local debugging.');
+        process.exit(3);
+    }
 }
 const buildIrPython = pythons[pythons.length - 1].bin;
 console.error(`gen-v5-stub: using ${buildIrPython} for IR packaging`);
