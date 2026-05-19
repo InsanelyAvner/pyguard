@@ -6,9 +6,10 @@ import { obfuscatePythonCode } from "@/lib/obfuscate";
 import { makeV5Schema } from "@/lib/v5/schema";
 import { INTERPRETER_SRC_B64 } from "@/lib/v5/interpreter_src";
 import {
-    assertPythonTargetCoverage,
+    assertSourceSyntaxCoverage,
     createCompileAndPackCode,
     discoverPythons,
+    selectTargetPythons,
 } from "@/scripts/multi_marshal.mjs";
 import { createRateLimiter, clientIp } from "@/lib/rateLimit";
 
@@ -147,9 +148,8 @@ function getPythons(): PyInfo[] {
     if (found.length === 0) {
         throw new Error("no CPython toolchains discovered on server");
     }
-    assertPythonTargetCoverage(found);
-    cachedPythons = found;
-    return found;
+    cachedPythons = selectTargetPythons(found) as PyInfo[];
+    return cachedPythons;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +194,15 @@ export async function POST(req: NextRequest) {
             `server build toolchain missing: ${
                 e instanceof Error ? e.message : String(e)
             }`,
+        );
+    }
+    try {
+        assertSourceSyntaxCoverage(pythons, source, "<user>");
+    } catch (e) {
+        return jsonError(
+            400,
+            e instanceof Error ? e.message : String(e),
+            "syntax",
         );
     }
 

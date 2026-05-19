@@ -1712,6 +1712,12 @@ def ${n_cp_dec}(${n_cp_buf}, ${n_cp_ofs}=0):
 def ${n_loadc}(${n_pv_bytes}):
     if len(${n_pv_bytes}) < 5 or ${n_pv_bytes}[:4] != bytes([80, 71, 67, 86]):
         sys.exit(0)
+    if getattr(getattr(sys, 'implementation', None), 'name', 'cpython') != 'cpython':
+        try:
+            sys.stderr.write('PyGuard: unsupported Python implementation; use CPython.\\n')
+        except Exception:
+            pass
+        sys.exit(1)
     ${n_pv_n} = ${n_pv_bytes}[4]
     ${n_pv_i} = 5
     ${n_pv_a} = sys.version_info.major & 255
@@ -1730,7 +1736,11 @@ def ${n_loadc}(${n_pv_bytes}):
             ${n_pv_sel} = ${n_pv_bytes}[${n_pv_i}:${n_pv_i} + ${n_pv_l}]
         ${n_pv_i} += ${n_pv_l}
     if ${n_pv_sel} is None:
-        sys.exit(0)
+        try:
+            sys.stderr.write('PyGuard: unsupported CPython ' + str(sys.version_info.major) + '.' + str(sys.version_info.minor) + '; rebuild with that Python version installed.\\n')
+        except Exception:
+            pass
+        sys.exit(1)
     try:
         ${n_cp_obj}, ${n_cp_end} = ${n_cp_dec}(${n_pv_sel}, 0)
     except Exception:

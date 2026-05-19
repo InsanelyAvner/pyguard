@@ -21,9 +21,10 @@ import { makeV5Schema } from "../lib/v5/schema";
 import { INTERPRETER_SRC_B64 } from "../lib/v5/interpreter_src";
 import type { V5IR } from "../lib/v5/assemble";
 import {
-    assertPythonTargetCoverage,
+    assertSourceSyntaxCoverage,
     createCompileAndPackCode,
     discoverPythons,
+    selectTargetPythons,
 } from "../scripts/multi_marshal.mjs";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -71,16 +72,21 @@ function buildV5IR(source: string, schema: object): V5IR {
 
 interface PyBuild { bin: string; major: number; minor: number; }
 
-const PYTHONS = discoverPythons() as PyBuild[];
-if (PYTHONS.length === 0) throw new Error("no Python build toolchains discovered");
-assertPythonTargetCoverage(PYTHONS);
+const DISCOVERED_PYTHONS = discoverPythons() as PyBuild[];
+if (DISCOVERED_PYTHONS.length === 0) throw new Error("no Python build toolchains discovered");
+const PYTHONS = selectTargetPythons(DISCOVERED_PYTHONS) as PyBuild[];
 const BUILD_PYTHON = PYTHONS[PYTHONS.length - 1].bin;
+const LZMA_TIMEOUT_MS = Number(process.env.PYGUARD_LZMA_TIMEOUT_MS || 120_000);
 
 function lzmaCompress(bytes: Uint8Array): Uint8Array {
     const r = execFileSync(
         BUILD_PYTHON,
         ["-c", "import sys, lzma; sys.stdout.buffer.write(lzma.compress(sys.stdin.buffer.read(), preset=9|lzma.PRESET_EXTREME))"],
-        { input: Buffer.from(bytes), maxBuffer: 256 * 1024 * 1024 },
+        {
+            input: Buffer.from(bytes),
+            maxBuffer: 256 * 1024 * 1024,
+            timeout: LZMA_TIMEOUT_MS,
+        },
     );
     return Uint8Array.from(r);
 }
@@ -124,6 +130,27 @@ function assertUnsupportedRuntimeMessage(interpreterSource: string): void {
         );
     }
     console.log(`PASS  unsupported-runtime diagnostic  built py${buildOnly.major}.${buildOnly.minor} ran py${runWith.major}.${runWith.minor}`);
+}
+
+function assertSourceSyntaxCoverageRejectsNewerSyntax(): void {
+    const has39 = PYTHONS.some((p) => p.major === 3 && p.minor === 9);
+    const has310Plus = PYTHONS.some((p) => p.major === 3 && p.minor >= 10);
+    if (!has39 || !has310Plus) {
+        console.log("SKIP  source syntax coverage diagnostic (need py3.9 and py3.10+ targets)");
+        return;
+    }
+    const source = "match 1:\n    case 1:\n        pass\n";
+    try {
+        assertSourceSyntaxCoverage(PYTHONS, source, "<syntax_gate>");
+    } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.includes("target CPython 3.9")) {
+            console.log("PASS  source syntax coverage diagnostic");
+            return;
+        }
+        throw e;
+    }
+    throw new Error("source syntax coverage diagnostic failed: newer syntax was accepted for py3.9 target");
 }
 
 function main() {
@@ -188,6 +215,7 @@ function main() {
     }
 
     assertUnsupportedRuntimeMessage(interpreterSource);
+    assertSourceSyntaxCoverageRejectsNewerSyntax();
 }
 
 main();

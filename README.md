@@ -103,6 +103,7 @@ Use these in order:
 npx tsx tests/run_disclosure_checks.ts
 npm run test:compat
 npm run test:compat:docker
+npm run test:compat:realworld
 bash tests/pentest/run_scoreboard.sh
 ```
 
@@ -114,6 +115,12 @@ What they mean:
 - `run_docker_compat.mjs`: Linux runtime compatibility gate against official
   `python:3.9-slim` through `python:3.14-slim` images. Override with
   `PYGUARD_DOCKER_IMAGES=python:3.12-slim,python:3.13-slim` when narrowing CI.
+- `run_realworld_compat.mjs`: final-artifact runtime gate that builds a stdin
+  prompt program and runs the obfuscated output with both `python` and
+  `python3`, absolute paths, foreign cwd, CRLF line endings, and exact patch
+  images including `python:3.13.7-slim`. Override with
+  `PYGUARD_REALWORLD_IMAGES=python:3.13.7-slim` when reproducing a reported
+  environment.
 - `run_scoreboard.sh`: attack dashboard
 
 The scoreboard matters, but it is not the product definition. If the shortest one-run recovery path still works, the hardening round is not done even if many attacks say `HELD`.
@@ -171,7 +178,7 @@ The `/api/obfuscate` Next.js route shells out to Python on untrusted input, so t
 Container:
 
 - `Dockerfile` runs the Node process as an unprivileged `pyguard` user (uid 10001), not root.
-- The runtime stage ships CPython 3.9 – 3.14 side-by-side on `$PATH`; the route's `discoverPythons()` probes these on first request. This is the supported common-version range tested locally and in Docker.
+- The runtime stage ships CPython 3.9 – 3.14 side-by-side on `$PATH`; the route's `discoverPythons()` probes these on first request and then filters to the configured target range. This is the supported common-version range tested locally and in Docker.
 - `HEALTHCHECK` fetches `/` and expects a 2xx so orchestrators can rotate unhealthy replicas.
 
 Subprocess safety:
@@ -191,9 +198,11 @@ Deploy-time env vars:
 | -- | -- | -- |
 | `TRUSTED_PROXY` | `0` | Set to `1` when running behind a reverse proxy; the rate limiter then keys on `x-forwarded-for` / `x-real-ip`. |
 | `PYGUARD_PYTHON_BINS` | *(empty)* | Platform-delimited list of Python binaries to use instead of probing `$PATH` (`:` on Linux/macOS, `;` on Windows). |
-| `PYGUARD_TARGET_MINORS` | `3.9,3.10,3.11,3.12,3.13,3.14` | CPython minor versions that must be present before generating stubs. Narrow this only when intentionally producing limited-target artifacts. |
+| `PYGUARD_TARGET_MINORS` | `3.9,3.10,3.11,3.12,3.13,3.14` | CPython minor versions that must be present before generating stubs. Comma-separated versions and ranges such as `3.9-3.14` are accepted. Narrow this only when intentionally producing limited-target artifacts. |
 | `PYGUARD_ALLOW_PARTIAL_PYTHONS` | *(unset)* | Local `gen-v5-stub.mjs` escape hatch that permits generating a stub with only discovered Python minors. Do not set in production. |
 | `PYGUARD_COMPILE_TIMEOUT_MS` | `300000` | Timeout for per-minor code-pack compiler subprocesses. Raise this on slow CI/build hosts. |
+| `PYGUARD_LZMA_TIMEOUT_MS` | `120000` local CLI/tests, `20000` API | Timeout for Python LZMA compressor subprocesses. |
+| `PYGUARD_SYNTAX_TIMEOUT_MS` | `30000` | Timeout for per-target source syntax checks. The build refuses source that cannot be parsed by every configured target minor. |
 | `PYGUARD_RL_CAPACITY` | `10` | Max requests per window per IP. |
 | `PYGUARD_RL_WINDOW_MS` | `60000` | Rate-limit window length (ms). |
 | `PYGUARD_ALLOW_UNOBFUSCATED_IR` | *(unset)* | Opt-in escape hatch for embedded/Pyodide contexts where `transform_ast` genuinely cannot be loaded. Any production deployment should leave this unset — otherwise a broken import silently ships un-deformed IR. |

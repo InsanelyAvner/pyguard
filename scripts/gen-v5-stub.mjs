@@ -17,12 +17,14 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
-    assertPythonTargetCoverage,
+    assertSourceSyntaxCoverage,
     discoverPythons as discoverPythonsHelper,
+    selectTargetPythons,
 } from './multi_marshal.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+const LZMA_TIMEOUT_MS = Number(process.env.PYGUARD_LZMA_TIMEOUT_MS || 120_000);
 
 function randToken(used) {
     const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -220,24 +222,33 @@ const args = parseArgs(process.argv);
 const userSource = fs.readFileSync(args.src, 'utf-8');
 const schema = makeV5Schema();
 
-// Discover Python build toolchains. v5 uses the first one for IR
-// emission, and all discovered minors for the internal code-pack path.
-const pythons = discoverPythonsHelper();
-if (pythons.length === 0) {
+// Discover Python build toolchains. v5 uses the newest targeted minor for IR
+// emission, and all targeted minors for the internal code-pack path.
+const discoveredPythons = discoverPythonsHelper();
+if (discoveredPythons.length === 0) {
     console.error('gen-v5-stub: no Python build toolchains discovered');
     process.exit(3);
 }
+let pythons;
 if (!process.env.PYGUARD_ALLOW_PARTIAL_PYTHONS) {
     try {
-        assertPythonTargetCoverage(pythons);
+        pythons = selectTargetPythons(discoveredPythons);
     } catch (err) {
         console.error(`gen-v5-stub: ${err.message}`);
         console.error('Set PYGUARD_ALLOW_PARTIAL_PYTHONS=1 only for narrow local debugging.');
         process.exit(3);
     }
+} else {
+    pythons = discoveredPythons;
 }
 const buildIrPython = pythons[pythons.length - 1].bin;
 console.error(`gen-v5-stub: using ${buildIrPython} for IR packaging`);
+try {
+    assertSourceSyntaxCoverage(pythons, userSource, args.src);
+} catch (err) {
+    console.error(`gen-v5-stub: ${err.message}`);
+    process.exit(3);
+}
 
 // Step 1: compile IR via build_ir.py.
 // build_ir's __main__ reads source from stdin and writes a JSON envelope
@@ -266,8 +277,16 @@ function lzmaCompress(bytes) {
     const r = spawnSync(
         buildIrPython,
         ['-c', 'import sys, lzma; sys.stdout.buffer.write(lzma.compress(sys.stdin.buffer.read(), preset=9|lzma.PRESET_EXTREME))'],
-        { input: Buffer.from(bytes), maxBuffer: 256 * 1024 * 1024 },
+        {
+            input: Buffer.from(bytes),
+            maxBuffer: 256 * 1024 * 1024,
+            timeout: LZMA_TIMEOUT_MS,
+            killSignal: 'SIGKILL',
+        },
     );
+    if (r.error && r.error.code === 'ETIMEDOUT') {
+        throw new Error(`lzma compress timed out after ${LZMA_TIMEOUT_MS}ms`);
+    }
     if (r.status !== 0) throw new Error('lzma compress failed: ' + r.stderr);
     return Uint8Array.from(r.stdout);
 }

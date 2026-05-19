@@ -23,9 +23,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const BUILD_IR_PATH = path.join(ROOT, 'lib/v5/build_ir.py');
 
-const DEFAULT_MINORS = ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14'];
+export const DEFAULT_MINORS = ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14'];
 const ENTRY_HEADER_LEN = 6;
 const COMPILE_TIMEOUT_MS = Number(process.env.PYGUARD_COMPILE_TIMEOUT_MS || 300_000);
+const SYNTAX_TIMEOUT_MS = Number(process.env.PYGUARD_SYNTAX_TIMEOUT_MS || 30_000);
 
 function subprocessEnv(extra = {}) {
     const keep = [
@@ -148,10 +149,43 @@ export function discoverPythons() {
 export function targetMinors() {
     const raw = process.env.PYGUARD_TARGET_MINORS;
     if (!raw) return DEFAULT_MINORS.slice();
-    return raw
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+    const out = [];
+    const seen = new Set();
+    const add = (major, minor) => {
+        if (major !== 3 || minor < 0 || minor > 255) {
+            throw new Error(`invalid PYGUARD_TARGET_MINORS entry: ${major}.${minor}`);
+        }
+        const key = `${major}.${minor}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            out.push(key);
+        }
+    };
+    for (const partRaw of raw.split(',')) {
+        const part = partRaw.trim();
+        if (!part) continue;
+        const range = part.match(/^(\d+)\.(\d+)\s*-\s*(\d+)\.(\d+)$/);
+        if (range) {
+            const aMaj = Number(range[1]);
+            const aMin = Number(range[2]);
+            const bMaj = Number(range[3]);
+            const bMin = Number(range[4]);
+            if (aMaj !== bMaj || aMaj !== 3 || bMin < aMin) {
+                throw new Error(`invalid PYGUARD_TARGET_MINORS range: ${part}`);
+            }
+            for (let minor = aMin; minor <= bMin; minor++) add(aMaj, minor);
+            continue;
+        }
+        const one = part.match(/^(\d+)\.(\d+)$/);
+        if (!one) {
+            throw new Error(`invalid PYGUARD_TARGET_MINORS entry: ${part}`);
+        }
+        add(Number(one[1]), Number(one[2]));
+    }
+    if (out.length === 0) {
+        throw new Error('PYGUARD_TARGET_MINORS did not name any target versions');
+    }
+    return out;
 }
 
 export function assertPythonTargetCoverage(pythons, targets = targetMinors()) {
@@ -165,6 +199,54 @@ export function assertPythonTargetCoverage(pythons, targets = targetMinors()) {
             '. Install these versions, set PYGUARD_PYTHON_BINS, or narrow ' +
             'PYGUARD_TARGET_MINORS intentionally.',
         );
+    }
+}
+
+export function selectTargetPythons(pythons, targets = targetMinors()) {
+    assertPythonTargetCoverage(pythons, targets);
+    const targetSet = new Set(targets);
+    return (pythons || [])
+        .filter((p) => targetSet.has(`${p.major}.${p.minor}`))
+        .sort((a, b) => {
+            if (a.major !== b.major) return a.major - b.major;
+            return a.minor - b.minor;
+        });
+}
+
+function lastMeaningfulStderrLine(stderr) {
+    const lines = String(stderr || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    return lines[lines.length - 1] || 'syntax check failed';
+}
+
+export function assertSourceSyntaxCoverage(pythons, source, filename = '<pg>') {
+    if (typeof source !== 'string') {
+        throw new Error('source syntax coverage check requires a string source');
+    }
+    const snippet = [
+        'import ast, sys',
+        'ast.parse(sys.stdin.read(), filename=sys.argv[1], mode="exec")',
+    ].join('\n');
+    for (const py of pythons || []) {
+        const r = spawnSync(py.bin, ['-c', snippet, filename], {
+            input: source,
+            encoding: 'utf-8',
+            env: subprocessEnv(),
+            timeout: SYNTAX_TIMEOUT_MS,
+            killSignal: 'SIGKILL',
+        });
+        const label = `${py.major}.${py.minor}`;
+        if (r.error && r.error.code === 'ETIMEDOUT') {
+            throw new Error(`source syntax check timed out on CPython ${label}`);
+        }
+        if (r.status !== 0) {
+            throw new Error(
+                `source is not syntax-compatible with target CPython ${label}: ` +
+                lastMeaningfulStderrLine(r.stderr),
+            );
+        }
     }
 }
 
@@ -245,11 +327,11 @@ export function packPGCV(entries) {
     return packVersioned(entries, 'PGCV');
 }
 
-// Build a closure that compiles `source` with every discovered Python
+// Build a closure that compiles `source` with every targeted Python
 // and packs the outputs into PGMV. Reusing one closure across stage1 /
 // stage2 / interpreter lets the caller probe Pythons just once.
 export function createCompileAndMarshal(pythons) {
-    const builds = pythons || discoverPythons();
+    const builds = pythons || selectTargetPythons(discoverPythons());
     if (builds.length === 0) {
         throw new Error('createCompileAndMarshal: no Python toolchains discovered');
     }
@@ -274,7 +356,7 @@ export function createCompileAndMarshal(pythons) {
 }
 
 export function createCompileAndPackCode(pythons) {
-    const builds = pythons || discoverPythons();
+    const builds = pythons || selectTargetPythons(discoverPythons());
     if (builds.length === 0) {
         throw new Error('createCompileAndPackCode: no Python toolchains discovered');
     }

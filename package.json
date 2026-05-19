@@ -14,6 +14,7 @@
     "gen:v5": "npm run gen:interpreter && npm run gen:build-ir",
     "test:compat": "npx tsx tests/run_tests.ts",
     "test:compat:docker": "node tests/run_docker_compat.mjs",
+    "test:compat:realworld": "node tests/run_realworld_compat.mjs",
     "test:disclosure": "npx tsx tests/run_disclosure_checks.ts"
   },
   "dependencies": {
